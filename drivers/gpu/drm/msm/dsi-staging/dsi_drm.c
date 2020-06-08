@@ -22,11 +22,6 @@
 #include "dsi_drm.h"
 #include "sde_trace.h"
 
-#if defined(CONFIG_DISPLAY_SAMSUNG)
-//#include "ss_dsi_panel_common.h"
-#include "../samsung/ss_dsi_panel_common.h"
-#endif
-
 #define to_dsi_bridge(x)     container_of((x), struct dsi_bridge, base)
 #define to_dsi_state(x)      container_of((x), struct dsi_connector_state, base)
 
@@ -399,16 +394,8 @@ static bool dsi_bridge_mode_fixup(struct drm_bridge *bridge,
 			(!(dsi_mode.dsi_mode_flags & DSI_MODE_FLAG_VRR)) &&
 			(!(dsi_mode.dsi_mode_flags & DSI_MODE_FLAG_DYN_CLK)) &&
 			(!crtc_state->active_changed ||
-			 display->is_cont_splash_enabled)) {
-#if defined(CONFIG_DISPLAY_SAMSUNG)
-				 if (display->panel->panel_initialized || display->is_cont_splash_enabled) {
-					 dsi_mode.dsi_mode_flags |= DSI_MODE_FLAG_DMS;
-					 LCD_INFO("DMS : switch mode %s -> %s\n", (&cur_mode)->name, adjusted_mode->name);
-				 }
-#else
-				dsi_mode.dsi_mode_flags |= DSI_MODE_FLAG_DMS;
-#endif
-		}
+			 display->is_cont_splash_enabled))
+			dsi_mode.dsi_mode_flags |= DSI_MODE_FLAG_DMS;
 	}
 
 	/* convert back to drm mode, propagating the private info & flags */

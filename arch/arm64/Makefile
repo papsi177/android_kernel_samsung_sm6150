@@ -184,8 +184,7 @@ zinstall install:
 PHONY += dtbs dtbs_install
 
 dtbs: prepare scripts
-#	$(Q)$(MAKE) $(build)=$(boot)/dts
-	$(Q)$(MAKE) $(build)=$(boot)/dts/samsung
+	$(Q)$(MAKE) $(build)=$(boot)/dts
 
 dtbs_install:
 	$(Q)$(MAKE) $(dtbinst)=$(boot)/dts

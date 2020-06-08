@@ -24,10 +24,6 @@
 #include <linux/moduleparam.h>
 #include "lpm-levels.h"
 
-#if defined(CONFIG_SEC_A90Q_PROJECT)
-extern bool pd_charging;
-#endif
-
 enum lpm_type {
 	IDLE = 0,
 	SUSPEND,
@@ -339,11 +335,6 @@ bool lpm_cluster_mode_allow(struct lpm_cluster *cluster,
 
 	if (!lpm_pdev || !avail)
 		return false;
-
-#if defined(CONFIG_SEC_A90Q_PROJECT)
-	 if (pd_charging && ((mode == 2) || (mode == 3)))
-		 return false;
-#endif
 
 	return !!(from_idle ? avail->idle_enabled :
 				avail->suspend_enabled);

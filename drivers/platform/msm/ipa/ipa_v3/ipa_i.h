@@ -992,6 +992,7 @@ struct ipa3_repl_ctx {
 struct ipa3_sys_context {
 	u32 len;
 	atomic_t curr_polling_state;
+	atomic_t workqueue_flushed;
 	struct delayed_work switch_to_intr_work;
 	enum ipa3_sys_pipe_policy policy;
 	bool use_comm_evt_ring;
@@ -1017,8 +1018,6 @@ struct ipa3_sys_context {
 	struct list_head pending_pkts[GSI_VEID_MAX];
 	atomic_t xmit_eot_cnt;
 	struct tasklet_struct tasklet;
-	bool skip_eot;
-	u32 eob_drop_cnt;
 
 	/* ordering is important - mutable fields go above */
 	struct ipa3_ep_context *ep;
@@ -1141,7 +1140,10 @@ struct ipa3_desc {
  */
 struct ipa3_rx_pkt_wrapper {
 	struct list_head link;
-	struct ipa_rx_data data;
+	union {
+		struct ipa_rx_data data;
+		struct ipa_rx_page_data page_data;
+	};
 	u32 len;
 	struct work_struct work;
 	struct ipa3_sys_context *sys;
@@ -1907,6 +1909,7 @@ struct ipa3_context {
 	struct IpaHwOffloadStatsAllocCmdData_t
 		gsi_info[IPA_HW_PROTOCOL_MAX];
 	bool ipa_mhi_proxy;
+	bool ipa_wan_skb_page;
 };
 
 struct ipa3_plat_drv_res {
@@ -1953,6 +1956,7 @@ struct ipa3_plat_drv_res {
 	bool ipa_endp_delay_wa;
 	u32 secure_debug_check_action;
 	bool ipa_mhi_proxy;
+	bool ipa_wan_skb_page;
 };
 
 /**

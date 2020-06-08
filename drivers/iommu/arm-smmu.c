@@ -68,10 +68,6 @@
 #include <linux/debugfs.h>
 #include <linux/uaccess.h>
 
-#ifdef CONFIG_SEC_DEBUG
-#include <linux/sec_debug.h>
-#endif
-
 #define ARM_MMU500_ACTLR_CPRE		(1 << 1)
 
 #define ARM_MMU500_ACR_CACHE_LOCK	(1 << 26)
@@ -1589,45 +1585,6 @@ static phys_addr_t arm_smmu_verify_fault(struct iommu_domain *domain,
 	return (phys == 0 ? phys_post_tlbiall : phys);
 }
 
-static char* arm_smmu_get_devname(struct arm_smmu_domain *smmu_domain, u32 sid)
-{
-	struct iommu_fwspec *fwspec = NULL;
-	struct device* dev = NULL;
-	u32 i;
-	char *colon, *comma, *dot, *ch = NULL;
-
-	if (smmu_domain->dev)
-		fwspec = smmu_domain->dev->iommu_fwspec;
-
-	for (i = 0; fwspec && i < fwspec->num_ids; i++) {
-		if ((fwspec->ids[i] & smmu_domain->smmu->streamid_mask) == sid) {
-			dev = smmu_domain->dev;
-			break;
-		}
-	}
-
-	if (dev) {
-		if (dev_is_pci(dev))
-			return (char *)dev_name(dev);
-			
-		colon = strrchr(dev_name(dev), ':');
-		comma = strrchr(dev_name(dev), ',');
-		dot = strrchr(dev_name(dev), '.');
-
-		if (colon == NULL && comma == NULL && dot == NULL)
-			return (char *)dev_name(dev);
-		
-		if (colon > comma)
-			ch = colon;
-		else
-			ch = comma;
-
-		return dot > ch ? dot + 1 : ch + 1;
-	}
-
-	return "No Device";
-}
-
 static irqreturn_t arm_smmu_context_fault(int irq, void *dev)
 {
 	int flags, ret, tmp;
@@ -1665,9 +1622,6 @@ static irqreturn_t arm_smmu_context_fault(int irq, void *dev)
 	if (fatal_asf && (fsr & FSR_ASF)) {
 		dev_err(smmu->dev,
 			"Took an address size fault.  Refusing to recover.\n");
-
-		sec_debug_save_smmu_info_asf_fatal();
-
 		BUG();
 	}
 
@@ -1697,12 +1651,11 @@ static irqreturn_t arm_smmu_context_fault(int irq, void *dev)
 		ret = IRQ_HANDLED;
 		resume = RESUME_TERMINATE;
 	} else {
-		phys_addr_t phys_atos = arm_smmu_verify_fault(domain,
-							      iova,
-							      fsr);
-
 		if (__ratelimit(&_rs)) {
+			phys_addr_t phys_atos;
+
 			print_ctx_regs(smmu, cfg, fsr);
+			phys_atos = arm_smmu_verify_fault(domain, iova, fsr);
 			dev_err(smmu->dev,
 				"Unhandled context fault: iova=0x%08lx, cb=%d, fsr=0x%x, fsynr0=0x%x, fsynr1=0x%x\n",
 				iova, cfg->cbndx, fsr, fsynr0, fsynr1);
@@ -1730,10 +1683,7 @@ static irqreturn_t arm_smmu_context_fault(int irq, void *dev)
 		if (!non_fatal_fault) {
 			dev_err(smmu->dev,
 				"Unhandled arm-smmu context fault!\n");
-
-			sec_debug_save_smmu_info_fatal();
-			// BUG();
-			panic("%s SMMU Fault - SID=0x%x", arm_smmu_get_devname(smmu_domain, frsynra), frsynra);
+			BUG();
 		}
 	}
 
@@ -4193,10 +4143,34 @@ static void arm_smmu_device_reset(struct arm_smmu_device *smmu)
 	void __iomem *gr0_base = ARM_SMMU_GR0(smmu);
 	int i;
 	u32 reg;
+	void __iomem *cb_base;
+	u32 fsr;
+	unsigned long iova;
 
 	/* clear global FSR */
 	reg = readl_relaxed(ARM_SMMU_GR0_NS(smmu) + ARM_SMMU_GR0_sGFSR);
 	writel_relaxed(reg, ARM_SMMU_GR0_NS(smmu) + ARM_SMMU_GR0_sGFSR);
+
+	for (i = 0; i < smmu->num_context_banks; ++i) {
+		cb_base = ARM_SMMU_CB(smmu, i);
+
+		fsr = readl_relaxed(cb_base + ARM_SMMU_CB_FSR);
+		writel_relaxed(fsr, cb_base + ARM_SMMU_CB_FSR);
+
+		iova = readq_relaxed(cb_base + ARM_SMMU_CB_FAR);
+		writeq_relaxed(0, cb_base + ARM_SMMU_CB_FAR);
+		writel_relaxed(0, ARM_SMMU_GR1(smmu) +
+			       ARM_SMMU_GR1_CBFRSYNRA(i));
+
+		writel_relaxed(0, cb_base + ARM_SMMU_CB_FSYNR0);
+		writel_relaxed(0, cb_base + ARM_SMMU_CB_FSYNR1);
+		pr_info("CB %d, FSR 0x%x FAR 0x%lx reset\n", i, fsr, iova);
+	}
+
+	/*
+	 * Barrier required to ensure fault registers are cleared.
+	 */
+	wmb();
 
 	/*
 	 * Reset stream mapping groups: Initial values mark all SMRn as

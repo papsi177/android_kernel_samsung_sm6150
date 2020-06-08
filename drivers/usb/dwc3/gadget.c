@@ -27,10 +27,6 @@
 #include <linux/list.h>
 #include <linux/dma-mapping.h>
 
-#ifdef CONFIG_USB_NOTIFY_PROC_LOG
-#include <linux/usblog_proc_notify.h>
-#endif
-
 #include <linux/usb/ch9.h>
 #include <linux/usb/composite.h>
 #include <linux/usb/gadget.h>
@@ -44,26 +40,6 @@ static void dwc3_gadget_wakeup_interrupt(struct dwc3 *dwc, bool remote_wakeup);
 static int dwc3_gadget_wakeup_int(struct dwc3 *dwc);
 static int __dwc3_gadget_start(struct dwc3 *dwc);
 static void dwc3_gadget_disconnect_interrupt(struct dwc3 *dwc);
-#ifdef CONFIG_USB_ANDROID_SAMSUNG_COMPOSITE
-static void dwc3_disconnect_gadget(struct dwc3 *dwc);
-static void dwc3_gadget_cable_connect(struct dwc3 *dwc, bool connect)
-{
-	static bool last_connect;
-	struct usb_composite_dev *cdev;
-
-	if (last_connect != connect) {
-		if (!connect) {
-			cdev = get_gadget_data(&dwc->gadget);
-			if (cdev != NULL) {
-				cdev->mute_switch = 0;
-				cdev->force_disconnect = 1;
-				pr_err("usb: Force Disconnect set to 1\n");
-			}
-		}
-		last_connect = connect;
-	}
-}
-#endif
 
 /**
  * dwc3_gadget_set_test_mode - enables usb2 test modes
@@ -97,41 +73,8 @@ int dwc3_gadget_set_test_mode(struct dwc3 *dwc, int mode)
 	return 0;
 }
 
-#ifdef CONFIG_USB_TYPEC_MANAGER_NOTIFIER
 /**
- * dwc3_gadget_get_cmply_link_state - Gets current state of USB Link
- * @dwc: pointer to our context structure
- *
- * extern module can check dwc3 core link state  This function will
- * return 1 link is on compliance of loopback mode else 0.
- */
-int dwc3_gadget_get_cmply_link_state(struct usb_gadget *g)
-{
-	struct dwc3 *dwc = gadget_to_dwc(g);
-	u32		reg = 0;
-	u32		ret = -ENODEV;
-
- 	if (!dwc)
-		return ret;
-
-	if (dwc->pullups_connected) {
-		reg= dwc3_gadget_get_link_state(dwc);
-
-		dev_info(dwc->dev, "%s: link state = %d\n", __func__, reg);
-		if ((reg == DWC3_LINK_STATE_CMPLY) || (reg == DWC3_LINK_STATE_LPBK))
-			ret = 1;
-		else
-			ret = 0;
-	} else
-		dev_info(dwc->dev, "%s: udc not enabled \n", __func__);
-
-	return ret;
-}
-EXPORT_SYMBOL(dwc3_gadget_get_cmply_link_state);
-#endif
-
-/**
- * dwc3_gadget_get_link_state - Gets current state of USB Link
+ * dwc3_gadget_get_link_state - gets current state of usb link
  * @dwc: pointer to our context structure
  *
  * Caller should take care of locking. This function will
@@ -351,9 +294,11 @@ void dwc3_gadget_del_and_unmap_request(struct dwc3_ep *dep,
 	if (req->request.status == -EINPROGRESS)
 		req->request.status = status;
 
-	if (req->trb)
+	if (req->trb) {
+		dbg_ep_unmap(dep->number, req);
 		usb_gadget_unmap_request_by_dev(dwc->sysdev,
 				&req->request, req->direction);
+	}
 
 	req->trb = NULL;
 	trace_dwc3_gadget_giveback(req);
@@ -376,17 +321,9 @@ void dwc3_gadget_giveback(struct dwc3_ep *dep, struct dwc3_request *req,
 
 	dwc3_gadget_del_and_unmap_request(dep, req, status);
 
-#ifdef CONFIG_USB_ANDROID_SAMSUNG_COMPOSITE
-	if (req->request.complete) {
-		spin_unlock(&dwc->lock);
-		usb_gadget_giveback_request(&dep->endpoint, &req->request);
-		spin_lock(&dwc->lock);
-	}
-#else
 	spin_unlock(&dwc->lock);
 	usb_gadget_giveback_request(&dep->endpoint, &req->request);
 	spin_lock(&dwc->lock);
-#endif
 }
 
 /**
@@ -1434,6 +1371,7 @@ static void dwc3_prepare_trbs(struct dwc3_ep *dep)
 		else
 			dwc3_prepare_one_trb_linear(dep, req);
 
+		dbg_ep_map(dep->number, req);
 		if (!dwc3_calc_trbs_left(dep))
 			return;
 	}
@@ -1597,6 +1535,7 @@ static int __dwc3_gadget_ep_queue(struct dwc3_ep *dep, struct dwc3_request *req)
 
 	list_add_tail(&req->list, &dep->pending_list);
 
+	dbg_ep_queue(dep->number, req);
 	/*
 	 * NOTICE: Isochronous endpoints should NEVER be prestarted. We must
 	 * wait for a XferNotReady event so we will know what's the current
@@ -1773,7 +1712,7 @@ static int dwc3_gadget_ep_dequeue(struct usb_ep *ep,
 	}
 
 out1:
-	dbg_event(dep->number, "DEQUEUE", 0);
+	dbg_ep_dequeue(dep->number, req);
 	/* giveback the request */
 	dep->queued_requests--;
 	dwc3_gadget_giveback(dep, req, -ECONNRESET);
@@ -2141,9 +2080,6 @@ static int dwc3_gadget_run_stop(struct dwc3 *dwc, int is_on, int suspend)
 
 	dbg_event(0xFF, "run_stop", is_on);
 	reg = dwc3_readl(dwc->regs, DWC3_DCTL);
-
-	pr_info("usb: %s is_on:%d \n", __func__,is_on);
-    
 	if (is_on) {
 		if (dwc->revision <= DWC3_REVISION_187A) {
 			reg &= ~DWC3_DCTL_TRGTULST_MASK;
@@ -2252,7 +2188,6 @@ static int dwc3_gadget_pullup(struct usb_gadget *g, int is_on)
 
 	is_on = !!is_on;
 	dwc->softconnect = is_on;
-	pr_info("usb: %s is_on: %d\n", __func__, is_on);
 
 	if (((dwc->dr_mode == USB_DR_MODE_OTG) && !dwc->vbus_active)
 			|| !dwc->gadget_driver) {
@@ -2303,23 +2238,6 @@ static int dwc3_gadget_pullup(struct usb_gadget *g, int is_on)
 	dwc3_notify_event(dwc, DWC3_CONTROLLER_NOTIFY_OTG_EVENT, 0);
 
 	ret = dwc3_gadget_run_stop(dwc, is_on, false);
-#ifdef CONFIG_USB_NOTIFY_PROC_LOG
-	if (ret == 0) {
-		if (is_on)
-			store_usblog_notify(NOTIFY_USBSTATE,
-					(void *)"USB_STATE=PULLUP:EN:SUCCESS", NULL);
-		else
-			store_usblog_notify(NOTIFY_USBSTATE,
-					(void *)"USB_STATE=PULLUP:DIS:SUCCESS", NULL);
-	} else {
-		if (is_on)
-			store_usblog_notify(NOTIFY_USBSTATE,
-					(void *)"USB_STATE=PULLUP:EN:FAIL", NULL);
-		else
-			store_usblog_notify(NOTIFY_USBSTATE,
-					(void *)"USB_STATE=PULLUP:DIS:FAIL", NULL);
-	}
-#endif
 	spin_unlock_irqrestore(&dwc->lock, flags);
 	enable_irq(dwc->irq);
 
@@ -2405,9 +2323,6 @@ static int dwc3_gadget_vbus_session(struct usb_gadget *_gadget, int is_active)
 {
 	struct dwc3 *dwc = gadget_to_dwc(_gadget);
 	unsigned long flags;
-	int ret = 0;
-
-	pr_info("usb: %s is_active: %d \n", __func__, is_active);
 
 	if (dwc->dr_mode != USB_DR_MODE_OTG)
 		return -EPERM;
@@ -2416,14 +2331,6 @@ static int dwc3_gadget_vbus_session(struct usb_gadget *_gadget, int is_active)
 
 	dbg_event(0xFF, "VbusSess", is_active);
 	spin_lock_irqsave(&dwc->lock, flags);
-
-#ifdef CONFIG_USB_ANDROID_SAMSUNG_COMPOSITE
-	if (dwc->vbus_active == is_active) {
-		pr_err("usb: dwc3 state is same\n");
-		spin_unlock_irqrestore(&dwc->lock, flags);
-		return 0;
-	}
-#endif
 
 	/* Mark that the vbus was powered */
 	dwc->vbus_active = is_active;
@@ -2438,28 +2345,9 @@ static int dwc3_gadget_vbus_session(struct usb_gadget *_gadget, int is_active)
 			 * Both vbus was activated by otg and pullup was
 			 * signaled by the gadget driver.
 			 */
-			ret = dwc3_gadget_run_stop(dwc, 1, false);
-#ifdef CONFIG_USB_NOTIFY_PROC_LOG
-			if (ret == 0)
-				store_usblog_notify(NOTIFY_USBSTATE,
-						(void *)"USB_STATE=VBUS:EN:SUCCESS", NULL);
-			else
-				store_usblog_notify(NOTIFY_USBSTATE,
-						(void *)"USB_STATE=VBUS:EN:FAIL", NULL);
-#endif
+			dwc3_gadget_run_stop(dwc, 1, false);
 		} else {
-#ifdef CONFIG_USB_ANDROID_SAMSUNG_COMPOSITE
-			dwc3_gadget_cable_connect(dwc, false);
-#endif
-			ret = dwc3_gadget_run_stop(dwc, 0, false);
-#ifdef CONFIG_USB_NOTIFY_PROC_LOG
-			if (ret == 0)
-				store_usblog_notify(NOTIFY_USBSTATE,
-						(void *)"USB_STATE=VBUS:DIS:SUCCESS", NULL);
-			else
-				store_usblog_notify(NOTIFY_USBSTATE,
-						(void *)"USB_STATE=VBUS:DIS:FAIL", NULL);
-#endif
+			dwc3_gadget_run_stop(dwc, 0, false);
 		}
 	}
 
@@ -2469,9 +2357,6 @@ static int dwc3_gadget_vbus_session(struct usb_gadget *_gadget, int is_active)
 	 */
 	if (!dwc->vbus_active) {
 		dev_dbg(dwc->dev, "calling disconnect from %s\n", __func__);
-#ifdef CONFIG_USB_ANDROID_SAMSUNG_COMPOSITE
-		dwc3_gadget_cable_connect(dwc, false);
-#endif
 		dwc3_gadget_disconnect_interrupt(dwc);
 	}
 
@@ -2603,7 +2488,6 @@ static int dwc3_gadget_stop(struct usb_gadget *g)
 	unsigned long		flags;
 
 	spin_lock_irqsave(&dwc->lock, flags);
-	pr_info("usb: %s release gadget driver\n", __func__);
 
 	dwc->gadget_driver	= NULL;
 	spin_unlock_irqrestore(&dwc->lock, flags);
@@ -3140,7 +3024,6 @@ static void dwc3_disconnect_gadget(struct dwc3 *dwc)
 		gadget_driver = dwc->gadget_driver;
 		spin_unlock(&dwc->lock);
 		dbg_event(0xFF, "DISCONNECT", 0);
-		pr_info("usb: %s DISCONNECT\n", __func__);
 		gadget_driver->disconnect(&dwc->gadget);
 		spin_lock(&dwc->lock);
 	}
@@ -3283,7 +3166,6 @@ static void dwc3_gadget_disconnect_interrupt(struct dwc3 *dwc)
 	int			reg;
 
 	dbg_event(0xFF, "DISCONNECT INT", 0);
-	pr_info("usb: %s\n", __func__);
 	dev_dbg(dwc->dev, "Notify OTG from %s\n", __func__);
 	dwc->b_suspend = false;
 	dwc3_notify_event(dwc, DWC3_CONTROLLER_NOTIFY_OTG_EVENT, 0);
@@ -3313,8 +3195,6 @@ static void dwc3_gadget_reset_interrupt(struct dwc3 *dwc)
 	usb_phy_start_link_training(dwc->usb3_phy);
 
 	dwc->connected = true;
-
-	pr_info("usb: %s\n", __func__);
 
 	/*
 	 * WORKAROUND: DWC3 revisions <1.88a have an issue which
@@ -3346,10 +3226,6 @@ static void dwc3_gadget_reset_interrupt(struct dwc3 *dwc)
 		if (dwc->setup_packet_pending)
 			dwc3_gadget_disconnect_interrupt(dwc);
 	}
-#ifdef CONFIG_USB_CHARGING_EVENT
-	dwc->vbus_current = USB_CURRENT_UNCONFIGURED;
-	schedule_work(&dwc->set_vbus_current_work);
-#endif
 
 	dbg_event(0xFF, "BUS RESET", 0);
 	dev_dbg(dwc->dev, "Notify OTG from %s\n", __func__);
@@ -3432,7 +3308,6 @@ static void dwc3_gadget_conndone_interrupt(struct dwc3 *dwc)
 		dwc3_gadget_ep0_desc.wMaxPacketSize = cpu_to_le16(512);
 		dwc->gadget.ep0->maxpacket = 512;
 		dwc->gadget.speed = USB_SPEED_SUPER_PLUS;
-		pr_info("usb: %s (SS+)\n", __func__);
 		break;
 	case DWC3_DSTS_SUPERSPEED:
 		/*
@@ -3454,25 +3329,21 @@ static void dwc3_gadget_conndone_interrupt(struct dwc3 *dwc)
 		dwc3_gadget_ep0_desc.wMaxPacketSize = cpu_to_le16(512);
 		dwc->gadget.ep0->maxpacket = 512;
 		dwc->gadget.speed = USB_SPEED_SUPER;
-		pr_info("usb: %s (SS)\n", __func__);
 		break;
 	case DWC3_DSTS_HIGHSPEED:
 		dwc3_gadget_ep0_desc.wMaxPacketSize = cpu_to_le16(64);
 		dwc->gadget.ep0->maxpacket = 64;
 		dwc->gadget.speed = USB_SPEED_HIGH;
-		pr_info("usb: %s (HS)\n", __func__);
 		break;
 	case DWC3_DSTS_FULLSPEED:
 		dwc3_gadget_ep0_desc.wMaxPacketSize = cpu_to_le16(64);
 		dwc->gadget.ep0->maxpacket = 64;
 		dwc->gadget.speed = USB_SPEED_FULL;
-		pr_info("usb: %s (FS)\n", __func__);
 		break;
 	case DWC3_DSTS_LOWSPEED:
 		dwc3_gadget_ep0_desc.wMaxPacketSize = cpu_to_le16(8);
 		dwc->gadget.ep0->maxpacket = 8;
 		dwc->gadget.speed = USB_SPEED_LOW;
-		pr_info("usb: %s (LS)\n", __func__);
 		break;
 	}
 
@@ -3701,11 +3572,6 @@ static void dwc3_gadget_suspend_interrupt(struct dwc3 *dwc,
 			return;
 		}
 
-#ifdef CONFIG_USB_CHARGING_EVENT
-		dwc->vbus_current = USB_CURRENT_UNCONFIGURED;
-		schedule_work(&dwc->set_vbus_current_work);
-		pr_info("usb: %s\n", __func__);
-#endif
 		dwc3_suspend_gadget(dwc);
 
 		dev_dbg(dwc->dev, "Notify OTG from %s\n", __func__);
@@ -3745,24 +3611,14 @@ static void dwc3_gadget_interrupt(struct dwc3 *dwc,
 {
 	switch (event->type) {
 	case DWC3_DEVICE_EVENT_DISCONNECT:
-#ifdef CONFIG_USB_ANDROID_SAMSUNG_COMPOSITE
-		dwc3_gadget_cable_connect(dwc, false);
-#endif
 		dwc3_gadget_disconnect_interrupt(dwc);
 		dwc->dbg_gadget_events.disconnect++;
 		break;
 	case DWC3_DEVICE_EVENT_RESET:
 		dwc3_gadget_reset_interrupt(dwc);
-#ifdef CONFIG_USB_NOTIFY_PROC_LOG
-		store_usblog_notify(NOTIFY_USBSTATE,
-					(void *)"USB_STATE=RESET", NULL);
-#endif
 		dwc->dbg_gadget_events.reset++;
 		break;
 	case DWC3_DEVICE_EVENT_CONNECT_DONE:
-#ifdef CONFIG_USB_ANDROID_SAMSUNG_COMPOSITE
-		dwc3_gadget_cable_connect(dwc, true);
-#endif
 		dwc3_gadget_conndone_interrupt(dwc);
 		dwc->dbg_gadget_events.connect++;
 		break;
@@ -3793,14 +3649,8 @@ static void dwc3_gadget_interrupt(struct dwc3 *dwc,
 			if (dwc->gadget.state >= USB_STATE_CONFIGURED)
 				dwc3_gadget_suspend_interrupt(dwc,
 						event->event_info);
-#ifndef CONFIG_USB_CCIC_NOTIFIER_USING_QC
-			/* 
-			 * not set charging current to 2mA in usb suspend state
-			 * for samsung charging concept.
-			 */
 			else
 				usb_gadget_vbus_draw(&dwc->gadget, 2);
-#endif
 		}
 		break;
 	case DWC3_DEVICE_EVENT_SOF:

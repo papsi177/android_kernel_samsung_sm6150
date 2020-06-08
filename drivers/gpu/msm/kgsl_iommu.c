@@ -20,6 +20,7 @@
 #include <linux/msm_kgsl.h>
 #include <linux/ratelimit.h>
 #include <linux/of_platform.h>
+#include <linux/random.h>
 #include <soc/qcom/scm.h>
 #include <soc/qcom/secure_buffer.h>
 #include <linux/compat.h>
@@ -33,10 +34,6 @@
 #include "adreno.h"
 #include "kgsl_trace.h"
 #include "kgsl_pwrctrl.h"
-
-#if defined(CONFIG_DISPLAY_SAMSUNG)
-#include "../drm/msm/samsung/ss_dpui_common.h"
-#endif
 
 #define _IOMMU_PRIV(_mmu) (&((_mmu)->priv.iommu))
 
@@ -115,6 +112,7 @@ static int global_pt_count;
 static struct kgsl_memdesc gpu_qdss_desc;
 static struct kgsl_memdesc gpu_qtimer_desc;
 static unsigned int context_bank_number;
+
 void kgsl_print_global_pt_entries(struct seq_file *s)
 {
 	int i;
@@ -226,7 +224,7 @@ static void kgsl_iommu_remove_global(struct kgsl_mmu *mmu,
 static void kgsl_iommu_add_global(struct kgsl_mmu *mmu,
 		struct kgsl_memdesc *memdesc, const char *name)
 {
-	u32 bit;
+	u32 bit, start = 0;
 	u64 size = kgsl_memdesc_footprint(memdesc);
 
 	if (memdesc->gpuaddr != 0)
@@ -235,10 +233,26 @@ static void kgsl_iommu_add_global(struct kgsl_mmu *mmu,
 	if (WARN_ON(global_pt_count >= GLOBAL_PT_ENTRIES))
 		return;
 
-	bit = bitmap_find_next_zero_area(global_map, GLOBAL_MAP_PAGES,
-		0, size >> PAGE_SHIFT, 0);
+	if (WARN_ON(size > KGSL_IOMMU_GLOBAL_MEM_SIZE))
+		return;
 
-	if (WARN_ON(bit >= GLOBAL_MAP_PAGES))
+	if (memdesc->priv & KGSL_MEMDESC_RANDOM) {
+		u32 range = GLOBAL_MAP_PAGES - (size >> PAGE_SHIFT);
+
+		start = get_random_int() % range;
+	}
+
+	while (start >= 0) {
+		bit = bitmap_find_next_zero_area(global_map, GLOBAL_MAP_PAGES,
+			start, size >> PAGE_SHIFT, 0);
+
+		if (bit < GLOBAL_MAP_PAGES)
+			break;
+
+		start--;
+	}
+
+	if (WARN_ON(start < 0))
 		return;
 
 	memdesc->gpuaddr =
@@ -921,11 +935,6 @@ static int kgsl_iommu_fault_handler(struct iommu_domain *domain,
 			else
 				KGSL_LOG_DUMP(ctx->kgsldev, "*EMPTY*\n");
 		}
-		
-#if defined(CONFIG_DISPLAY_SAMSUNG)
-		//inc_dpui_u32_field(DPUI_KEY_QCT_GPU_PF, 1);
-#endif
-
 	}
 
 
@@ -2137,15 +2146,6 @@ kgsl_iommu_get_current_ttbr0(struct kgsl_mmu *mmu)
 		return 0;
 
 	kgsl_iommu_enable_clk(mmu);
-
-#if defined(CONFIG_DISPLAY_SAMSUNG)
-	if (ctx[KGSL_IOMMU_CONTEXT_USER].regbase == NULL) {
-		WARN(1, "regbase seems not to be initialzed yet\n");
-		kgsl_iommu_disable_clk(mmu);
-		return 0;
-	}
-#endif
-
 	val = KGSL_IOMMU_GET_CTX_REG_Q(ctx, TTBR0);
 	kgsl_iommu_disable_clk(mmu);
 	return val;

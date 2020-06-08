@@ -40,11 +40,6 @@
 #include "sde_hw_top.h"
 #include "sde_hw_qdss.h"
 
-#if defined(CONFIG_DISPLAY_SAMSUNG)
-#include <linux/interrupt.h>
-#include "ss_dsi_panel_common.h"
-#endif
-
 #define SDE_DEBUG_ENC(e, fmt, ...) SDE_DEBUG("enc%d " fmt,\
 		(e) ? (e)->base.base.id : -1, ##__VA_ARGS__)
 
@@ -4519,61 +4514,6 @@ static int _helper_flush_qsync(struct sde_encoder_phys *phys_enc)
 	return 0;
 }
 
-
-#if defined(CONFIG_DISPLAY_SAMSUNG)
-#include <drm/drm_encoder.h>
-int ss_get_vdd_ndx_from_state(struct drm_atomic_state *old_state)
-{
-	struct drm_crtc *crtc;
-	struct drm_crtc_state *old_crtc_state;
-	int i;
-
-	struct drm_encoder *encoder;
-	struct drm_device *dev;
-
-	struct sde_encoder_virt *sde_enc = NULL;
-	struct sde_encoder_phys *phys;
-
-	struct sde_connector *c_conn;
-	struct dsi_display *display;
-	struct samsung_display_driver_data *vdd;
-	int ndx = -EINVAL;
-
-
-	for_each_crtc_in_state(old_state, crtc, old_crtc_state, i) {
-		if (crtc->state->active) {
-			dev = crtc->dev;
-			list_for_each_entry(encoder, &dev->mode_config.encoder_list, head) {
-				if (encoder->crtc == crtc)
-					sde_enc = to_sde_encoder_virt(encoder);
-			}
-		}
-	}
-
-	if (!sde_enc)
-		return -ENODEV;
-
-	/* TOOD: remove below W/A and debug why panic occurs in video mode (DP) or writeback case */
-	if (sde_enc->disp_info.intf_type != DRM_MODE_CONNECTOR_DSI)
-		return PRIMARY_DISPLAY_NDX;
-
-
-
-	for (i = 0; i < sde_enc->num_phys_encs; i++) {
-		phys = sde_enc->phys_encs[i];
-		if (phys) {
-			c_conn = to_sde_connector(phys->connector);
-			display = c_conn->display;
-			vdd = display->panel->panel_private;
-
-			ndx = vdd->ndx;
-		}
-	}
-
-	return ndx;
-}
-#endif
-
 static bool _sde_encoder_dsc_is_dirty(struct sde_encoder_virt *sde_enc)
 {
 	int i;
@@ -5436,7 +5376,7 @@ struct drm_encoder *sde_encoder_init_with_ops(
 	snprintf(name, SDE_NAME_SIZE, "rsc_enc%u", drm_enc->base.id);
 	sde_enc->rsc_client = sde_rsc_client_create(SDE_RSC_INDEX, name,
 		disp_info->is_primary ? SDE_RSC_PRIMARY_DISP_CLIENT :
-		SDE_RSC_EXTERNAL_DISP_CLIENT, intf_index);
+		SDE_RSC_EXTERNAL_DISP_CLIENT, intf_index + 1);
 	if (IS_ERR_OR_NULL(sde_enc->rsc_client)) {
 		SDE_DEBUG("sde rsc client create failed :%ld\n",
 						PTR_ERR(sde_enc->rsc_client));

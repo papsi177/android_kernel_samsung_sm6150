@@ -24,10 +24,6 @@
 #include "sde_crtc.h"
 #include "sde_rm.h"
 
-#if defined(CONFIG_DISPLAY_SAMSUNG)
-#include "ss_dsi_panel_common.h"
-#endif
-
 #define BL_NODE_NAME_SIZE 32
 
 /* Autorefresh will occur after FRAME_CNT frames. Large values are unlikely */
@@ -139,7 +135,7 @@ static int sde_backlight_setup(struct sde_connector *c_conn,
 	if (!c_conn || !dev || !dev->dev) {
 		SDE_ERROR("invalid param\n");
 		return -EINVAL;
-	} else if (c_conn->connector_type != DRM_MODE_CONNECTOR_DSI) {
+	} else if (!c_conn->ops.set_backlight) {
 		return 0;
 	}
 
@@ -150,13 +146,7 @@ static int sde_backlight_setup(struct sde_connector *c_conn,
 	display = (struct dsi_display *) c_conn->display;
 	bl_config = &display->panel->bl_config;
 	props.max_brightness = bl_config->brightness_max_level;
-
-#if defined(CONFIG_DISPLAY_SAMSUNG)
-	props.brightness = bl_config->bl_level;
-#else
-	props.brightness = bl_config->brightness_max_level;
-#endif
-
+	props.brightness = bl_config->brightness_default_level;
 	snprintf(bl_node_name, BL_NODE_NAME_SIZE, "panel%u-backlight",
 							display_count);
 	c_conn->bl_device = backlight_device_register(bl_node_name, dev->dev,
@@ -455,11 +445,9 @@ void sde_connector_schedule_status_work(struct drm_connector *connector,
 			interval = c_conn->esd_status_interval ?
 				c_conn->esd_status_interval :
 					STATUS_CHECK_INTERVAL_MS;
-#if !defined(CONFIG_DISPLAY_SAMSUNG)
 			/* Schedule ESD status check */
 			schedule_delayed_work(&c_conn->status_work,
 				msecs_to_jiffies(interval));
-#endif
 			c_conn->esd_status_check = true;
 		} else {
 			/* Cancel any pending ESD status check */
@@ -504,13 +492,7 @@ static int _sde_connector_update_power_locked(struct sde_connector *c_conn)
 	SDE_DEBUG("conn %d - dpms %d, lp %d, panel %d\n", connector->base.id,
 			c_conn->dpms_mode, c_conn->lp_mode, mode);
 
-#if defined(CONFIG_DISPLAY_SAMSUNG)
-	if (mode != c_conn->last_panel_power_mode && c_conn->ops.set_power
-	&& !(mode == SDE_MODE_DPMS_OFF && c_conn->last_panel_power_mode == SDE_MODE_DPMS_ON)
-	&& !(mode == SDE_MODE_DPMS_ON && c_conn->last_panel_power_mode == SDE_MODE_DPMS_OFF)) {
-#else
 	if (mode != c_conn->last_panel_power_mode && c_conn->ops.set_power) {
-#endif
 		display = c_conn->display;
 		set_power = c_conn->ops.set_power;
 
@@ -653,11 +635,6 @@ int sde_connector_pre_kickoff(struct drm_connector *connector)
 	struct sde_connector_state *c_state;
 	struct msm_display_kickoff_params params;
 	int rc;
-#if defined(CONFIG_DISPLAY_SAMSUNG)
-	struct dsi_display *display;
-	struct samsung_display_driver_data *vdd;
-	int finger_mask_state;
-#endif
 
 	if (!connector) {
 		SDE_ERROR("invalid argument\n");
@@ -683,21 +660,6 @@ int sde_connector_pre_kickoff(struct drm_connector *connector)
 	params.rois = &c_state->rois;
 	params.hdr_meta = &c_state->hdr_meta;
 	params.qsync_update = false;
-#if defined(CONFIG_DISPLAY_SAMSUNG)
-	/* SAMSUNG_FINGERPRINT */
-	display = c_conn->display;
-	vdd = display->panel->panel_private;
-	if (vdd->support_optical_fingerprint) {
-		finger_mask_state = sde_connector_get_property(c_conn->base.state,
-				CONNECTOR_PROP_FINGERPRINT_MASK);
-		vdd->finger_mask_updated = false;
-		if (finger_mask_state != vdd->finger_mask) {
-			vdd->finger_mask = finger_mask_state;
-			vdd->finger_mask_updated = true;
-			SDE_ERROR("[FINGER_MASK]updated finger mask mode %d\n", finger_mask_state);
-		}
-	}
-#endif
 
 	if (c_conn->qsync_updated) {
 		params.qsync_mode = c_conn->qsync_mode;
@@ -1560,6 +1522,7 @@ static ssize_t _sde_debugfs_conn_cmd_tx_sts_read(struct file *file,
 		return 0;
 	}
 
+	blen = min_t(size_t, MAX_CMD_PAYLOAD_SIZE, count);
 	if (copy_to_user(buf, buffer, blen)) {
 		SDE_ERROR("copy to user buffer failed\n");
 		return -EFAULT;
@@ -1883,14 +1846,6 @@ static void _sde_connector_report_panel_dead(struct sde_connector *conn,
 	SDE_EVT32(SDE_EVTLOG_ERROR);
 	SDE_ERROR("esd check failed report PANEL_DEAD conn_id: %d enc_id: %d\n",
 			conn->base.base.id, conn->encoder->base.id);
-
-#if defined(CONFIG_DISPLAY_SAMSUNG)
-	{
-		struct dsi_display *display = conn->display;
-		struct samsung_display_driver_data *vdd = display->panel->panel_private;
-		vdd->panel_dead = true;
-	}
-#endif
 }
 
 int sde_connector_esd_status(struct drm_connector *conn)
@@ -1965,10 +1920,8 @@ static void sde_connector_check_status_work(struct work_struct *work)
 		/* If debugfs property is not set then take default value */
 		interval = conn->esd_status_interval ?
 			conn->esd_status_interval : STATUS_CHECK_INTERVAL_MS;
-#if !defined(CONFIG_DISPLAY_SAMSUNG)
 		schedule_delayed_work(&conn->status_work,
 			msecs_to_jiffies(interval));
-#endif
 		return;
 	}
 
@@ -2358,12 +2311,7 @@ struct drm_connector *sde_connector_init(struct drm_device *dev,
 	msm_property_install_range(&c_conn->property_info, "bl_scale",
 		0x0, 0, MAX_BL_SCALE_LEVEL, MAX_BL_SCALE_LEVEL,
 		CONNECTOR_PROP_BL_SCALE);
-#if defined(CONFIG_DISPLAY_SAMSUNG)
-		/* SAMSUNG_FINGERPRINT */
-	msm_property_install_range(&c_conn->property_info, "fingerprint_mask",
-		0x0, 0, 100, 0,
-		CONNECTOR_PROP_FINGERPRINT_MASK);
-#endif
+
 	msm_property_install_range(&c_conn->property_info, "ad_bl_scale",
 		0x0, 0, MAX_AD_BL_SCALE_LEVEL, MAX_AD_BL_SCALE_LEVEL,
 		CONNECTOR_PROP_AD_BL_SCALE);

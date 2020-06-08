@@ -746,8 +746,6 @@ static const struct adc_channels adc_chans_pmic5[ADC_MAX_CHANNEL] = {
 					SCALE_HW_CALIB_THERM_100K_PULLUP)
 	[ADC_GPIO4_PU2]	= ADC_CHAN_TEMP("gpio4_pu2", 1,
 					SCALE_HW_CALIB_THERM_100K_PULLUP)
-	[ADC_GPIO4] = ADC_CHAN_TEMP("adc_gpio4", 1,
-					SCALE_HW_CALIB_DEFAULT)
 };
 
 static const struct adc_channels adc_chans_rev2[ADC_MAX_CHANNEL] = {
@@ -771,8 +769,6 @@ static const struct adc_channels adc_chans_rev2[ADC_MAX_CHANNEL] = {
 					SCALE_HW_CALIB_THERM_100K_PULLUP)
 	[ADC_XO_THERM_PU2]	= ADC_CHAN_TEMP("xo_therm", 1,
 					SCALE_HW_CALIB_THERM_100K_PULLUP)
-	[ADC_GPIO4] 	= ADC_CHAN_TEMP("adc_gpio4", 1,
-					SCALE_HW_CALIB_DEFAULT)
 };
 
 static int adc_get_dt_channel_data(struct device *dev,

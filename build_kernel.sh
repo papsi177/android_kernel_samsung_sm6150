@@ -5,8 +5,8 @@ export ARCH=arm64
 
 mkdir out
 
-BUILD_CROSS_COMPILE=/home/firemax13/mykernel/toolchain/aarch64-linux-android-4.9/bin/aarch64-linux-android-
-KERNEL_LLVM_BIN=/home/firemax13/mykernel/toolchain/Clang/bin/clang
+BUILD_CROSS_COMPILE=/home/firemax13/mykernel/android_kernel_samsung_sm6150/toolchain/aarch64-linux-android-4.9/bin/aarch64-linux-android-
+KERNEL_LLVM_BIN=/home/firemax13/mykernel/android_kernel_samsung_sm6150/toolchain/clang/bin/clang
 CLANG_TRIPLE=aarch64-linux-gnu-
 KERNEL_MAKE_ENV="DTC_EXT=$(pwd)/tools/dtc CONFIG_BUILD_ARM64_DT_OVERLAY=y"
 

@@ -1,5 +1,7 @@
 #!/bin/bash
 
+set -e
+
 export CROSS_COMPILE=/home/firemax13/mykernel/toolchain/aarch64-linux-android-4.9/bin/aarch64-linux-android-
 export ARCH=arm64
 

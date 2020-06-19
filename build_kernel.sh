@@ -17,6 +17,7 @@ KERNEL_MAKE_ENV="DTC_EXT=$(pwd)/tools/dtc CONFIG_BUILD_ARM64_DT_OVERLAY=y"
 make -C $(pwd) O=$(pwd)/out $KERNEL_MAKE_ENV ARCH=arm64 CROSS_COMPILE=$BUILD_CROSS_COMPILE REAL_CC=$KERNEL_LLVM_BIN CLANG_TRIPLE=$CLANG_TRIPLE r1q_eur_open_defconfig
 make -j64 -C $(pwd) O=$(pwd)/out $KERNEL_MAKE_ENV ARCH=arm64 CROSS_COMPILE=$BUILD_CROSS_COMPILE REAL_CC=$KERNEL_LLVM_BIN CLANG_TRIPLE=$CLANG_TRIPLE
 
+tools/mkdtimg create out/dtbo.img --page_size=4096 $(find out -name "*.dtbo")
 # error_copy_script
 # cp out/arch/arm64/boot/Image $(pwd)/arch/arm64/boot/Image
 # This will cause some errors after the last make command is done and the Image is still not produced.
